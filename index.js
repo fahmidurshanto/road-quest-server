@@ -48,12 +48,22 @@ async function run() {
       res.send(result)
     })
 
+   
+
     app.get("/my-cars", async (req, res) =>{
       const email = req.query.email;
       const query = {email: email};
       const result = await carsCollection.find(query).toArray();
       res.send(result);
     })
+
+    app.get("/available-cars", async (req, res) =>{
+      const availability = req.query.availability;
+      const query = {availability : "available" && availability};
+      const result = await carsCollection.find(query).toArray();
+      res.send(result);
+    })
+
 
 
 
