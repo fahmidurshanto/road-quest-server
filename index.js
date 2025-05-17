@@ -2,6 +2,7 @@ const express = require('express');
 const app = express();
 const port = process.env.PORT || 5000;
 const cors = require('cors');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
 
 
@@ -15,7 +16,6 @@ app.use(express.json());
 
 
 
-const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const uri = `mongodb+srv://${process.env.USER}:${process.env.PASS}@cluster0.p5ldir2.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 
@@ -49,10 +49,13 @@ async function run() {
     })
 
     app.get("/my-cars", async (req, res) =>{
-      const cars = await carsCollection.find().toArray();
-      console.log(cars);
-      res.send(cars)
+      const email = req.query.email;
+      const query = {email: email};
+      const result = await carsCollection.find(query).toArray();
+      res.send(result);
     })
+
+
 
         // Get single car by ID
 app.get("/my-cars/:id", (req, res) => {
