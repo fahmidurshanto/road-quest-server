@@ -41,26 +41,61 @@ async function run() {
       res.send("Road Quest Server is running...")
     })
 
-    app.post("/my-cars", async (req, res) =>{
-      const car = req.body;
-      const result = await carsCollection.insertOne(car);
-      console.log(result)
-      res.send(result)
-    })
+    app.post("/my-cars", async (req, res) => {
+      try {
+        const car = req.body;
+        
+        // Insert into my-cars collection (with email)
+        const myCarsResult = await carsCollection.insertOne({
+          ...car,
+          collection: 'my-cars'  // Add a flag to identify the collection
+        });
 
-   
+        // Insert into cars collection (without email)
+        const carsResult = await carsCollection.insertOne({
+          ...car,
+          collection: 'cars'  // Add a flag to identify the collection
+        });
 
-    app.get("/my-cars", async (req, res) =>{
+        res.send({
+          myCarsResult,
+          carsResult,
+          message: "Car added successfully to both collections"
+        });
+      } catch (error) {
+        console.error("Error adding car:", error);
+        res.status(500).send({ error: "Failed to add car" });
+      }
+    });
+
+   app.get("/cars", async (req, res) => {
+    const result = await carsCollection.find({ collection: 'cars' }).toArray();
+    console.log(result)
+    res.send(result);
+   })
+
+    app.get("/my-cars", async (req, res) => {
       const email = req.query.email;
-      const query = {email: email};
+      const query = {
+        email: email,
+        collection: 'my-cars'
+      };
       const result = await carsCollection.find(query).toArray();
       res.send(result);
     })
 
     app.get("/available-cars", async (req, res) =>{
       const availability = req.query.availability;
+      console.log(availability)
       const query = {availability : "available" && availability};
       const result = await carsCollection.find(query).toArray();
+      res.send(result);
+    })
+
+    app.get("car/:id", async  (req, res) =>{
+      const id = req.params.id;
+      const query = {_id: new ObjectId(id)};
+      const result = await carsCollection.findOne(query);
       res.send(result);
     })
 
