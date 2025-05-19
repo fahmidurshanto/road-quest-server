@@ -31,6 +31,8 @@ const client = new MongoClient(uri, {
 const db = client.db("road-quest");
 const carsCollection = db.collection("cars");
 const usersCollection = db.collection("users");
+const bookingsCollection = db.collection("bookings");
+
 
 async function run() {
   try {
@@ -42,30 +44,31 @@ async function run() {
     })
 
     app.post("/my-cars", async (req, res) => {
-      try {
-        const car = req.body;
-        
-        // Insert into my-cars collection (with email)
-        const myCarsResult = await carsCollection.insertOne({
-          ...car,
-          collection: 'my-cars'  // Add a flag to identify the collection
-        });
-
+      const car = req.body;
+      
+      // Insert into my-cars collection (with email)
+      carsCollection.insertOne({
+        ...car,
+        collection: 'my-cars'  // Add a flag to identify the collection
+      })
+      .then(myCarsResult => {
         // Insert into cars collection (without email)
-        const carsResult = await carsCollection.insertOne({
+        return carsCollection.insertOne({
           ...car,
           collection: 'cars'  // Add a flag to identify the collection
+        })
+        .then(carsResult => {
+          res.send({
+            myCarsResult,
+            carsResult,
+            message: "Car added successfully to both collections"
+          });
         });
-
-        res.send({
-          myCarsResult,
-          carsResult,
-          message: "Car added successfully to both collections"
-        });
-      } catch (error) {
+      })
+      .catch(error => {
         console.error("Error adding car:", error);
         res.status(500).send({ error: "Failed to add car" });
-      }
+      });
     });
 
    app.get("/cars", async (req, res) => {
@@ -92,7 +95,7 @@ async function run() {
       res.send(result);
     })
 
-    app.get("car/:id", async  (req, res) =>{
+    app.get("/available-cars/:id", async  (req, res) =>{
       const id = req.params.id;
       const query = {_id: new ObjectId(id)};
       const result = await carsCollection.findOne(query);
@@ -186,11 +189,83 @@ app.delete("/my-cars/:id", (req, res) => {
     });
 });
 
+app.post("/my-bookings", (req, res) => {
+  const booking = req.body;
+  
+  // First create the booking
+  bookingsCollection.insertOne(booking)
+    .then(bookingResult => {
+      // Then increment the booking count for the car
+      return carsCollection.updateOne(
+        { _id: new ObjectId(booking.carId) },
+        { $inc: { bookingCount: 1 } }
+      )
+      .then(updateResult => {
+        res.status(201).send({
+          booking: bookingResult,
+          updateResult,
+          message: "Booking created and car booking count updated successfully"
+        });
+      });
+    })
+    .catch(error => {
+      console.error("Error creating booking:", error);
+      res.status(500).send({ error: "Failed to create booking" });
+    });
+});
 
+app.get("/my-bookings", (req, res) => {
+  const email = req.query.email;
+  
+  // Validate email parameter
+  if (!email) {
+    return res.status(400).send({ error: "Email parameter is required" });
+  }
 
+  const query = { email: email };
+  
+  bookingsCollection.find(query)
+    .toArray()
+    .then(result => {
+      if (!result || result.length === 0) {
+        return res.status(404).send({ message: "No bookings found for this email" });
+      }
+      res.status(200).send(result);
+    })
+    .catch(error => {
+      console.error("Error fetching bookings:", error);
+      res.status(500).send({ error: "Failed to fetch bookings" });
+    });
+});
+
+app.get("/cars/:id/booking-count", (req, res) => {
+  const carId = req.params.id;
+
+  if (!ObjectId.isValid(carId)) {
+    return res.status(400).send({ error: "Invalid car ID format" });
+  }
+
+  carsCollection.findOne(
+    { _id: new ObjectId(carId) },
+    { projection: { bookingCount: 1 } }
+  )
+    .then(car => {
+      if (!car) {
+        return res.status(404).send({ error: "Car not found" });
+      }
+      res.status(200).send({ 
+        carId,
+        bookingCount: car.bookingCount || 0 
+      });
+    })
+    .catch(error => {
+      console.error("Error fetching booking count:", error);
+      res.status(500).send({ error: "Failed to fetch booking count" });
+    });
+});
 
     app.listen(port, () =>{
-      console.log( `Road Quest Server is running on port ${port}`)
+      console.log(`Road Quest Server is running on port ${port}`)
     })
 
 
