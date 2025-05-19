@@ -7,7 +7,7 @@ require('dotenv').config();
 
 
 app.use(cors({
-  origin: ['http://localhost:5173',"https://road-quest-client.vercel.app/"],
+  origin: ["https://road-quest-client.vercel.app"],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
 }))
 app.use(express.json());
