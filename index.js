@@ -7,8 +7,8 @@ require('dotenv').config();
 
 
 app.use(cors({
-  origin: ["https://road-quest-client.vercel.app"],
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  origin: ["http://localhost:5173"],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
 }))
 app.use(express.json());
 
@@ -262,6 +262,88 @@ app.get("/cars/:id/booking-count", (req, res) => {
       console.error("Error fetching booking count:", error);
       res.status(500).send({ error: "Failed to fetch booking count" });
     });
+});
+
+app.patch("/bookings/:id", async (req, res) => {
+  const { id } = req.params;
+  const updatesFromBody = req.body; // Contains fields like { status: 'canceled' } or { bookingDate, endDate, totalPrice }
+
+  if (!ObjectId.isValid(id)) {
+    return res.status(400).send({ error: "Invalid booking ID format" });
+  }
+
+  const fieldsToUpdate = {};
+
+  // Whitelist and format fields that can be updated
+  if (updatesFromBody.status) {
+    fieldsToUpdate.status = updatesFromBody.status;
+  }
+  if (updatesFromBody.bookingDate) {
+    const parsedBookingDate = new Date(updatesFromBody.bookingDate);
+    if (isNaN(parsedBookingDate.getTime())) {
+        return res.status(400).send({ error: "Invalid bookingDate format." });
+    }
+    fieldsToUpdate.bookingDate = parsedBookingDate;
+  }
+  if (updatesFromBody.endDate) {
+    const parsedEndDate = new Date(updatesFromBody.endDate);
+    if (isNaN(parsedEndDate.getTime())) {
+        return res.status(400).send({ error: "Invalid endDate format." });
+    }
+    fieldsToUpdate.endDate = parsedEndDate;
+  }
+  if (updatesFromBody.totalPrice !== undefined) { // Check for undefined because totalPrice could be 0
+    fieldsToUpdate.totalPrice = parseFloat(updatesFromBody.totalPrice);
+    if (isNaN(fieldsToUpdate.totalPrice)) {
+        return res.status(400).send({ error: "Invalid totalPrice format. Must be a number." });
+    }
+  }
+
+  // Basic validation: If both dates are being updated, ensure endDate is after bookingDate
+  const finalBookingDate = fieldsToUpdate.bookingDate || (await bookingsCollection.findOne({_id: new ObjectId(id)}))?.bookingDate;
+  const finalEndDate = fieldsToUpdate.endDate || (await bookingsCollection.findOne({_id: new ObjectId(id)}))?.endDate;
+
+  if (finalBookingDate && finalEndDate && new Date(finalEndDate) < new Date(finalBookingDate)) {
+      return res.status(400).send({ error: "End date cannot be before start date." });
+  }
+
+  if (Object.keys(fieldsToUpdate).length === 0) {
+    return res.status(400).send({ error: "No valid update fields provided" });
+  }
+
+  fieldsToUpdate.lastModified = new Date(); // Add a last modified timestamp
+
+  try {
+    const result = await bookingsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: fieldsToUpdate }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ error: "Booking not found" });
+    }
+
+    if (result.modifiedCount === 0 && result.matchedCount === 1) {
+        // Document found, but no actual changes made by the update operation
+        const existingBooking = await bookingsCollection.findOne({ _id: new ObjectId(id) });
+        return res.status(200).send({
+          message: "Booking found, but no changes were applied (data might be the same).",
+          booking: existingBooking
+        });
+    }
+
+    // Fetch the updated document to return it
+    const updatedBooking = await bookingsCollection.findOne({ _id: new ObjectId(id) });
+
+    res.status(200).send({
+        message: "Booking updated successfully",
+        booking: updatedBooking
+    });
+
+  } catch (error) {
+    console.error("Error updating booking:", error);
+    res.status(500).send({ error: "Failed to update booking" });
+  }
 });
 
     app.listen(port, () =>{
