@@ -4,13 +4,16 @@ const port = process.env.PORT || 5000;
 const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
-
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
 
 app.use(cors({
-  origin: ["http://localhost:5173"],
+  origin: ["https://road-quest-client.vercel.app"],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  credentials: true,
 }))
 app.use(express.json());
+app.use(cookieParser())
 
 
 
@@ -43,9 +46,18 @@ async function run() {
       res.send("Road Quest Server is running...")
     })
 
+
+    // auth related api
+    app.post("/jwt", async (req, res) =>{
+      const user = req.body;
+      const token = jwt.sign(user, process.env.JWT_SECRET, {expiresIn: "1h"});
+      res.cookie("token", token, {httpOnly: true, secure: false, sameSite: ""})
+      res.send({success: true})
+    })
+
     app.post("/my-cars", async (req, res) => {
       const car = req.body;
-      
+      console.log(req.cookies)
       // Insert into my-cars collection (with email)
       carsCollection.insertOne({
         ...car,
@@ -83,14 +95,15 @@ async function run() {
         email: email,
         collection: 'my-cars'
       };
+      console.log(req.cookies)
       const result = await carsCollection.find(query).toArray();
       res.send(result);
     })
 
     app.get("/available-cars", async (req, res) =>{
       const availability = req.query.availability;
-      console.log(availability)
-      const query = {availability : "available" && availability};
+      console.log(req.cookies)
+      const query = {availability : "available"};
       const result = await carsCollection.find(query).toArray();
       res.send(result);
     })
@@ -192,12 +205,13 @@ app.delete("/my-cars/:id", (req, res) => {
 app.post("/my-bookings", (req, res) => {
   const booking = req.body;
   
-  // First create the booking
   bookingsCollection.insertOne(booking)
     .then(bookingResult => {
-      // Then increment the booking count for the car
       return carsCollection.updateOne(
-        { _id: new ObjectId(booking.carId) },
+        { 
+          _id: new ObjectId(booking.carId),
+          collection: 'cars' // Add this filter
+        },
         { $inc: { bookingCount: 1 } }
       )
       .then(updateResult => {
@@ -238,113 +252,139 @@ app.get("/my-bookings", (req, res) => {
     });
 });
 
-app.get("/cars/:id/booking-count", (req, res) => {
-  const carId = req.params.id;
 
-  if (!ObjectId.isValid(carId)) {
-    return res.status(400).send({ error: "Invalid car ID format" });
-  }
-
-  carsCollection.findOne(
-    { _id: new ObjectId(carId) },
-    { projection: { bookingCount: 1 } }
-  )
-    .then(car => {
-      if (!car) {
-        return res.status(404).send({ error: "Car not found" });
-      }
-      res.status(200).send({ 
-        carId,
-        bookingCount: car.bookingCount || 0 
-      });
-    })
-    .catch(error => {
-      console.error("Error fetching booking count:", error);
-      res.status(500).send({ error: "Failed to fetch booking count" });
-    });
-});
 
 app.patch("/bookings/:id", async (req, res) => {
   const { id } = req.params;
-  const updatesFromBody = req.body; // Contains fields like { status: 'canceled' } or { bookingDate, endDate, totalPrice }
+  const updates = req.body;
 
+  // Validate booking ID
   if (!ObjectId.isValid(id)) {
     return res.status(400).send({ error: "Invalid booking ID format" });
   }
 
-  const fieldsToUpdate = {};
-
-  // Whitelist and format fields that can be updated
-  if (updatesFromBody.status) {
-    fieldsToUpdate.status = updatesFromBody.status;
-  }
-  if (updatesFromBody.bookingDate) {
-    const parsedBookingDate = new Date(updatesFromBody.bookingDate);
-    if (isNaN(parsedBookingDate.getTime())) {
-        return res.status(400).send({ error: "Invalid bookingDate format." });
-    }
-    fieldsToUpdate.bookingDate = parsedBookingDate;
-  }
-  if (updatesFromBody.endDate) {
-    const parsedEndDate = new Date(updatesFromBody.endDate);
-    if (isNaN(parsedEndDate.getTime())) {
-        return res.status(400).send({ error: "Invalid endDate format." });
-    }
-    fieldsToUpdate.endDate = parsedEndDate;
-  }
-  if (updatesFromBody.totalPrice !== undefined) { // Check for undefined because totalPrice could be 0
-    fieldsToUpdate.totalPrice = parseFloat(updatesFromBody.totalPrice);
-    if (isNaN(fieldsToUpdate.totalPrice)) {
-        return res.status(400).send({ error: "Invalid totalPrice format. Must be a number." });
-    }
-  }
-
-  // Basic validation: If both dates are being updated, ensure endDate is after bookingDate
-  const finalBookingDate = fieldsToUpdate.bookingDate || (await bookingsCollection.findOne({_id: new ObjectId(id)}))?.bookingDate;
-  const finalEndDate = fieldsToUpdate.endDate || (await bookingsCollection.findOne({_id: new ObjectId(id)}))?.endDate;
-
-  if (finalBookingDate && finalEndDate && new Date(finalEndDate) < new Date(finalBookingDate)) {
-      return res.status(400).send({ error: "End date cannot be before start date." });
-  }
-
-  if (Object.keys(fieldsToUpdate).length === 0) {
-    return res.status(400).send({ error: "No valid update fields provided" });
-  }
-
-  fieldsToUpdate.lastModified = new Date(); // Add a last modified timestamp
-
   try {
-    const result = await bookingsCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: fieldsToUpdate }
-    );
-
-    if (result.matchedCount === 0) {
+    // 1. Fetch existing booking
+    const existingBooking = await bookingsCollection.findOne({ 
+      _id: new ObjectId(id) 
+    });
+    
+    if (!existingBooking) {
       return res.status(404).send({ error: "Booking not found" });
     }
 
-    if (result.modifiedCount === 0 && result.matchedCount === 1) {
-        // Document found, but no actual changes made by the update operation
-        const existingBooking = await bookingsCollection.findOne({ _id: new ObjectId(id) });
-        return res.status(200).send({
-          message: "Booking found, but no changes were applied (data might be the same).",
-          booking: existingBooking
+    // 2. Prepare update fields
+    const updateFields = { lastModified: new Date() };
+    let needsAvailabilityCheck = false;
+    let newStart = existingBooking.bookingDate;
+    let newEnd = existingBooking.endDate;
+
+    // 3. Handle date updates
+    if (updates.bookingDate || updates.endDate) {
+      needsAvailabilityCheck = true;
+      
+      // Parse new dates
+      newStart = updates.bookingDate ? new Date(updates.bookingDate) : existingBooking.bookingDate;
+      newEnd = updates.endDate ? new Date(updates.endDate) : existingBooking.endDate;
+
+      // Validate date types
+      if (isNaN(newStart.getTime()) || isNaN(newEnd.getTime())) {
+        return res.status(400).send({ error: "Invalid date format" });
+      }
+
+      // Validate date logic
+      if (newEnd <= newStart) {
+        return res.status(400).send({ 
+          error: "End date must be after start date" 
         });
+      }
+
+      // Add to update fields
+      updateFields.bookingDate = newStart;
+      updateFields.endDate = newEnd;
     }
 
-    // Fetch the updated document to return it
-    const updatedBooking = await bookingsCollection.findOne({ _id: new ObjectId(id) });
+    // 4. Handle price updates
+    if (updates.totalPrice !== undefined) {
+      updateFields.totalPrice = parseFloat(updates.totalPrice);
+      if (isNaN(updateFields.totalPrice)) {
+        return res.status(400).send({ error: "Invalid price format" });
+      }
+    }
 
-    res.status(200).send({
-        message: "Booking updated successfully",
-        booking: updatedBooking
+    // 5. Handle status updates
+    if (updates.status) {
+      updateFields.status = updates.status;
+    }
+
+    // 6. Check for availability conflicts (only if dates changed)
+    if (needsAvailabilityCheck) {
+      // Convert to ISO strings for accurate comparison
+      const isoStart = newStart.toISOString();
+      const isoEnd = newEnd.toISOString();
+      
+      const overlappingBooking = await bookingsCollection.findOne({
+        carId: existingBooking.carId,
+        status: { $in: ["confirmed", "pending"] },
+        _id: { $ne: new ObjectId(id) },
+        $or: [
+          // Existing booking overlaps with new start date
+          { 
+            bookingDate: { $lte: isoEnd },
+            endDate: { $gte: isoStart }
+          },
+          // New booking completely contains existing booking
+          { 
+            bookingDate: { $gte: isoStart },
+            endDate: { $lte: isoEnd }
+          }
+        ]
+      });
+
+      if (overlappingBooking) {
+        // Format dates for better readability
+        const formatDate = (date) => date.toISOString().split('T')[0];
+        
+        return res.status(409).send({
+          error: "Car not available for selected dates",
+          conflict: {
+            message: `Already booked from ${formatDate(overlappingBooking.bookingDate)} to ${formatDate(overlappingBooking.endDate)}`,
+            existingStart: overlappingBooking.bookingDate,
+            existingEnd: overlappingBooking.endDate
+          }
+        });
+      }
+    }
+
+    // 7. Perform the update
+    const result = await bookingsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updateFields }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ error: "Booking not found during update" });
+    }
+
+    // 8. Return updated booking
+    const updatedBooking = await bookingsCollection.findOne({ 
+      _id: new ObjectId(id) 
+    });
+
+    res.status(200).send({ 
+      message: "Booking updated successfully",
+      booking: updatedBooking 
     });
 
   } catch (error) {
-    console.error("Error updating booking:", error);
-    res.status(500).send({ error: "Failed to update booking" });
+    console.error("Booking modification error:", error);
+    res.status(500).send({ 
+      error: "Internal server error",
+      details: error.message 
+    });
   }
 });
+
 
     app.listen(port, () =>{
       console.log(`Road Quest Server is running on port ${port}`)
